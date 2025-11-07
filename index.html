@@ -222,8 +222,8 @@
 
         <div class="controls">
             <div class="input-group">
-                <label for="rowWidth">Row Width (pixels):</label>
-                <input type="number" id="rowWidth" value="1024" min="512" step="512">
+                <label for="blocksPerRow">Blocks per Row:</label>
+                <input type="number" id="blocksPerRow" value="4" min="1" max="16">
             </div>
             <div class="input-group">
                 <label for="timeSignature">Time Signature (optional):</label>
@@ -243,15 +243,13 @@
 
     <script>
         const htmlInput = document.getElementById('htmlInput');
-        const rowWidthInput = document.getElementById('rowWidth');
+        const blocksPerRowInput = document.getElementById('blocksPerRow');
         const timeSignatureInput = document.getElementById('timeSignature');
         const parseBtn = document.getElementById('parseBtn');
         const printBtn = document.getElementById('printBtn');
         const statusDiv = document.getElementById('status');
         const previewSection = document.getElementById('previewSection');
         const sheetContainer = document.getElementById('sheetContainer');
-
-        let parsedImages = [];
 
         function showStatus(message, type = 'info') {
             statusDiv.textContent = message;
@@ -320,35 +318,8 @@
             return images;
         }
 
-        function detectBarLines(canvas, ctx, x, width, height) {
-            const imageData = ctx.getImageData(x, 0, width, height);
-            const data = imageData.data;
-            const barPositions = [];
-
-            for (let col = 0; col < width; col++) {
-                let darkPixels = 0;
-                const samplePoints = 20;
-
-                for (let i = 0; i < samplePoints; i++) {
-                    const row = Math.floor((height / samplePoints) * i);
-                    const idx = (row * width + col) * 4;
-                    const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-
-                    if (brightness < 100) {
-                        darkPixels++;
-                    }
-                }
-
-                if (darkPixels > samplePoints * 0.5) {
-                    barPositions.push(x + col);
-                }
-            }
-
-            return barPositions;
-        }
-
-        function normalizeImages(images) {
-            if (images.length === 0) return [];
+        function combineImages(images) {
+            if (images.length === 0) return null;
 
             const canvas = document.createElement('canvas');
             const totalWidth = images.reduce((sum, img) => sum + img.width, 0);
@@ -363,63 +334,118 @@
 
             let currentX = 0;
             images.forEach(img => {
-                ctx.drawImage(img.element, currentX, Math.abs(img.top));
+                const yOffset = Math.abs(img.top);
+                ctx.drawImage(img.element, currentX, yOffset);
                 currentX += img.width;
             });
 
-            const segments = [];
-            let lastCut = 0;
-            const minSegmentWidth = 200;
-
-            images.forEach((img, idx) => {
-                if (idx === images.length - 1) {
-                    segments.push({
-                        x: lastCut,
-                        width: currentX - lastCut
-                    });
-                } else {
-                    const segmentWidth = img.width;
-                    if (segmentWidth >= minSegmentWidth) {
-                        segments.push({
-                            x: lastCut,
-                            width: lastCut + img.width - lastCut
-                        });
-                        lastCut += img.width;
-                    }
-                }
-            });
-
-            return segments.map(seg => {
-                const segCanvas = document.createElement('canvas');
-                segCanvas.width = seg.width;
-                segCanvas.height = maxHeight;
-                const segCtx = segCanvas.getContext('2d');
-                segCtx.drawImage(canvas, seg.x, 0, seg.width, maxHeight, 0, 0, seg.width, maxHeight);
-                return {
-                    canvas: segCanvas,
-                    width: seg.width
-                };
-            });
+            return { canvas, ctx };
         }
 
-        function arrangeInRows(segments, rowWidth) {
-            const rows = [];
-            let currentRow = [];
-            let currentWidth = 0;
+        function detectBarLines(canvas, ctx) {
+            const width = canvas.width;
+            const height = canvas.height;
+            const imageData = ctx.getImageData(0, 0, width, height);
+            const data = imageData.data;
 
-            segments.forEach(segment => {
-                if (currentWidth + segment.width > rowWidth && currentRow.length > 0) {
-                    rows.push(currentRow);
-                    currentRow = [];
-                    currentWidth = 0;
+            // Sample vertical lines to find bar lines
+            const verticalScores = [];
+
+            for (let x = 0; x < width; x++) {
+                let darkPixelCount = 0;
+                let totalSamples = 0;
+
+                // Sample points along the height, focusing on staff area
+                const startY = Math.floor(height * 0.2);
+                const endY = Math.floor(height * 0.8);
+                const step = 2;
+
+                for (let y = startY; y < endY; y += step) {
+                    const idx = (y * width + x) * 4;
+                    const r = data[idx];
+                    const g = data[idx + 1];
+                    const b = data[idx + 2];
+                    const brightness = (r + g + b) / 3;
+
+                    if (brightness < 128) {
+                        darkPixelCount++;
+                    }
+                    totalSamples++;
                 }
 
-                currentRow.push(segment);
-                currentWidth += segment.width;
-            });
+                const score = darkPixelCount / totalSamples;
+                verticalScores.push(score);
+            }
 
-            if (currentRow.length > 0) {
-                rows.push(currentRow);
+            // Find bar lines (vertical lines with high dark pixel density)
+            const barLines = [];
+            const threshold = 0.3;
+            const minBarWidth = 2;
+            const minBarDistance = 30; // Minimum distance between bars
+
+            let inBar = false;
+            let barStart = 0;
+
+            for (let x = 0; x < width; x++) {
+                if (verticalScores[x] > threshold && !inBar) {
+                    barStart = x;
+                    inBar = true;
+                } else if (verticalScores[x] <= threshold && inBar) {
+                    const barWidth = x - barStart;
+                    if (barWidth >= minBarWidth) {
+                        const barCenter = Math.floor((barStart + x) / 2);
+
+                        // Check if this bar is far enough from the last one
+                        if (barLines.length === 0 || barCenter - barLines[barLines.length - 1] >= minBarDistance) {
+                            barLines.push(barCenter);
+                        }
+                    }
+                    inBar = false;
+                }
+            }
+
+            return barLines;
+        }
+
+        function splitByBarLines(canvas, ctx, barLines) {
+            const height = canvas.height;
+            const blocks = [];
+
+            // Always include start and end
+            const splitPoints = [0, ...barLines, canvas.width];
+
+            for (let i = 0; i < splitPoints.length - 1; i++) {
+                const startX = splitPoints[i];
+                const endX = splitPoints[i + 1];
+                const width = endX - startX;
+
+                if (width > 10) { // Minimum block width
+                    const blockCanvas = document.createElement('canvas');
+                    blockCanvas.width = width;
+                    blockCanvas.height = height;
+
+                    const blockCtx = blockCanvas.getContext('2d');
+                    blockCtx.fillStyle = 'white';
+                    blockCtx.fillRect(0, 0, width, height);
+                    blockCtx.drawImage(canvas, startX, 0, width, height, 0, 0, width, height);
+
+                    blocks.push({
+                        canvas: blockCanvas,
+                        width: width,
+                        height: height
+                    });
+                }
+            }
+
+            return blocks;
+        }
+
+        function arrangeInRows(blocks, blocksPerRow) {
+            const rows = [];
+
+            for (let i = 0; i < blocks.length; i += blocksPerRow) {
+                const row = blocks.slice(i, i + blocksPerRow);
+                rows.push(row);
             }
 
             return rows;
@@ -432,13 +458,13 @@
                 const rowDiv = document.createElement('div');
                 rowDiv.className = 'sheet-row';
 
-                row.forEach(segment => {
+                row.forEach((block, blockIdx) => {
                     const segmentDiv = document.createElement('div');
                     segmentDiv.className = 'sheet-segment';
 
                     const img = document.createElement('img');
-                    img.src = segment.canvas.toDataURL();
-                    img.alt = `Sheet segment`;
+                    img.src = block.canvas.toDataURL();
+                    img.alt = `Block ${rowIdx}-${blockIdx}`;
 
                     segmentDiv.appendChild(img);
                     rowDiv.appendChild(segmentDiv);
@@ -483,13 +509,21 @@
                     return;
                 }
 
-                showStatus('Processing images...', 'info');
-                const segments = normalizeImages(images);
+                showStatus('Combining images into single sheet...', 'info');
+                const { canvas, ctx } = combineImages(images);
 
-                const rowWidth = parseInt(rowWidthInput.value) || 1024;
-                const rows = arrangeInRows(segments, rowWidth);
+                showStatus('Detecting bar lines...', 'info');
+                const barLines = detectBarLines(canvas, ctx);
+                showStatus(`Detected ${barLines.length} bar lines`, 'info');
 
-                showStatus(`Created ${rows.length} rows with ${segments.length} segments`, 'success');
+                showStatus('Splitting by bar lines...', 'info');
+                const blocks = splitByBarLines(canvas, ctx, barLines);
+                showStatus(`Created ${blocks.length} blocks`, 'info');
+
+                const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
+                const rows = arrangeInRows(blocks, blocksPerRow);
+
+                showStatus(`Arranged into ${rows.length} rows with ${blocksPerRow} blocks per row`, 'success');
 
                 renderSheet(rows);
 
