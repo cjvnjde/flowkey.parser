@@ -1,1 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flowkey Notes Parser & Printer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
 
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+
+        .input-section {
+            margin-bottom: 30px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            flex: 1;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .status.info {
+            display: block;
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status.error {
+            display: block;
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .status.success {
+            display: block;
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .preview-section {
+            margin-top: 30px;
+        }
+
+        .sheet-container {
+            background: white;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .sheet-row {
+            margin-bottom: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0;
+            border: 1px solid #eee;
+            page-break-inside: avoid;
+        }
+
+        .sheet-segment {
+            display: inline-block;
+        }
+
+        .sheet-segment img {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+
+            .container {
+                box-shadow: none;
+                padding: 0;
+                max-width: 100%;
+            }
+
+            .input-section,
+            .controls,
+            .status,
+            h1,
+            button {
+                display: none !important;
+            }
+
+            .sheet-container {
+                border: none;
+                padding: 0;
+            }
+
+            .sheet-row {
+                page-break-inside: avoid;
+                margin-bottom: 0;
+                border: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Flowkey Notes Parser & Printer</h1>
+
+        <div class="input-section">
+            <label for="htmlInput">Paste Flowkey HTML content:</label>
+            <textarea id="htmlInput" placeholder="Paste the HTML content containing sheet-image divs..."></textarea>
+        </div>
+
+        <div class="controls">
+            <div class="input-group">
+                <label for="rowWidth">Row Width (pixels):</label>
+                <input type="number" id="rowWidth" value="1024" min="512" step="512">
+            </div>
+            <div class="input-group">
+                <label for="timeSignature">Time Signature (optional):</label>
+                <input type="text" id="timeSignature" placeholder="e.g., 4 4">
+            </div>
+            <button id="parseBtn">Parse & Preview</button>
+            <button id="printBtn" disabled>Print</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div class="preview-section" id="previewSection" style="display: none;">
+            <h2>Preview</h2>
+            <div id="sheetContainer" class="sheet-container"></div>
+        </div>
+    </div>
+
+    <script>
+        const htmlInput = document.getElementById('htmlInput');
+        const rowWidthInput = document.getElementById('rowWidth');
+        const timeSignatureInput = document.getElementById('timeSignature');
+        const parseBtn = document.getElementById('parseBtn');
+        const printBtn = document.getElementById('printBtn');
+        const statusDiv = document.getElementById('status');
+        const previewSection = document.getElementById('previewSection');
+        const sheetContainer = document.getElementById('sheetContainer');
+
+        let parsedImages = [];
+
+        function showStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        function hideStatus() {
+            statusDiv.className = 'status';
+        }
+
+        function parseHTML(htmlContent) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+            const sheetImages = doc.querySelectorAll('.sheet-image');
+
+            const images = [];
+            sheetImages.forEach(img => {
+                const style = img.getAttribute('style');
+                const urlMatch = style.match(/url\(['"](.*?)['"]\)/);
+                const widthMatch = style.match(/width:\s*(\d+)px/);
+                const leftMatch = style.match(/left:\s*(\d+)px/);
+                const topMatch = style.match(/top:\s*([-\d]+)px/);
+
+                if (urlMatch && widthMatch && leftMatch) {
+                    images.push({
+                        url: urlMatch[1],
+                        width: parseInt(widthMatch[1]),
+                        left: parseInt(leftMatch[1]),
+                        top: topMatch ? parseInt(topMatch[1]) : 0
+                    });
+                }
+            });
+
+            return images.sort((a, b) => a.left - b.left);
+        }
+
+        async function loadImage(url) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = url;
+            });
+        }
+
+        async function loadAllImages(imageData) {
+            showStatus('Loading images...', 'info');
+            const images = [];
+
+            for (let i = 0; i < imageData.length; i++) {
+                try {
+                    const img = await loadImage(imageData[i].url);
+                    images.push({
+                        ...imageData[i],
+                        element: img,
+                        height: img.height
+                    });
+                    showStatus(`Loading images... ${i + 1}/${imageData.length}`, 'info');
+                } catch (error) {
+                    console.error(`Failed to load image ${i}:`, error);
+                    showStatus(`Failed to load image ${i + 1}`, 'error');
+                }
+            }
+
+            return images;
+        }
+
+        function detectBarLines(canvas, ctx, x, width, height) {
+            const imageData = ctx.getImageData(x, 0, width, height);
+            const data = imageData.data;
+            const barPositions = [];
+
+            for (let col = 0; col < width; col++) {
+                let darkPixels = 0;
+                const samplePoints = 20;
+
+                for (let i = 0; i < samplePoints; i++) {
+                    const row = Math.floor((height / samplePoints) * i);
+                    const idx = (row * width + col) * 4;
+                    const brightness = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+
+                    if (brightness < 100) {
+                        darkPixels++;
+                    }
+                }
+
+                if (darkPixels > samplePoints * 0.5) {
+                    barPositions.push(x + col);
+                }
+            }
+
+            return barPositions;
+        }
+
+        function normalizeImages(images) {
+            if (images.length === 0) return [];
+
+            const canvas = document.createElement('canvas');
+            const totalWidth = images.reduce((sum, img) => sum + img.width, 0);
+            const maxHeight = Math.max(...images.map(img => img.height));
+
+            canvas.width = totalWidth;
+            canvas.height = maxHeight;
+
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            let currentX = 0;
+            images.forEach(img => {
+                ctx.drawImage(img.element, currentX, Math.abs(img.top));
+                currentX += img.width;
+            });
+
+            const segments = [];
+            let lastCut = 0;
+            const minSegmentWidth = 200;
+
+            images.forEach((img, idx) => {
+                if (idx === images.length - 1) {
+                    segments.push({
+                        x: lastCut,
+                        width: currentX - lastCut
+                    });
+                } else {
+                    const segmentWidth = img.width;
+                    if (segmentWidth >= minSegmentWidth) {
+                        segments.push({
+                            x: lastCut,
+                            width: lastCut + img.width - lastCut
+                        });
+                        lastCut += img.width;
+                    }
+                }
+            });
+
+            return segments.map(seg => {
+                const segCanvas = document.createElement('canvas');
+                segCanvas.width = seg.width;
+                segCanvas.height = maxHeight;
+                const segCtx = segCanvas.getContext('2d');
+                segCtx.drawImage(canvas, seg.x, 0, seg.width, maxHeight, 0, 0, seg.width, maxHeight);
+                return {
+                    canvas: segCanvas,
+                    width: seg.width
+                };
+            });
+        }
+
+        function arrangeInRows(segments, rowWidth) {
+            const rows = [];
+            let currentRow = [];
+            let currentWidth = 0;
+
+            segments.forEach(segment => {
+                if (currentWidth + segment.width > rowWidth && currentRow.length > 0) {
+                    rows.push(currentRow);
+                    currentRow = [];
+                    currentWidth = 0;
+                }
+
+                currentRow.push(segment);
+                currentWidth += segment.width;
+            });
+
+            if (currentRow.length > 0) {
+                rows.push(currentRow);
+            }
+
+            return rows;
+        }
+
+        function renderSheet(rows) {
+            sheetContainer.innerHTML = '';
+
+            rows.forEach((row, rowIdx) => {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'sheet-row';
+
+                row.forEach(segment => {
+                    const segmentDiv = document.createElement('div');
+                    segmentDiv.className = 'sheet-segment';
+
+                    const img = document.createElement('img');
+                    img.src = segment.canvas.toDataURL();
+                    img.alt = `Sheet segment`;
+
+                    segmentDiv.appendChild(img);
+                    rowDiv.appendChild(segmentDiv);
+                });
+
+                sheetContainer.appendChild(rowDiv);
+            });
+
+            previewSection.style.display = 'block';
+            printBtn.disabled = false;
+        }
+
+        parseBtn.addEventListener('click', async () => {
+            const htmlContent = htmlInput.value.trim();
+
+            if (!htmlContent) {
+                showStatus('Please paste HTML content first', 'error');
+                return;
+            }
+
+            try {
+                parseBtn.disabled = true;
+                printBtn.disabled = true;
+                previewSection.style.display = 'none';
+
+                showStatus('Parsing HTML...', 'info');
+                const imageData = parseHTML(htmlContent);
+
+                if (imageData.length === 0) {
+                    showStatus('No sheet images found in the HTML', 'error');
+                    parseBtn.disabled = false;
+                    return;
+                }
+
+                showStatus(`Found ${imageData.length} image segments`, 'info');
+
+                const images = await loadAllImages(imageData);
+
+                if (images.length === 0) {
+                    showStatus('Failed to load any images', 'error');
+                    parseBtn.disabled = false;
+                    return;
+                }
+
+                showStatus('Processing images...', 'info');
+                const segments = normalizeImages(images);
+
+                const rowWidth = parseInt(rowWidthInput.value) || 1024;
+                const rows = arrangeInRows(segments, rowWidth);
+
+                showStatus(`Created ${rows.length} rows with ${segments.length} segments`, 'success');
+
+                renderSheet(rows);
+
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            } finally {
+                parseBtn.disabled = false;
+            }
+        });
+
+        printBtn.addEventListener('click', () => {
+            window.print();
+        });
+
+        htmlInput.addEventListener('paste', () => {
+            setTimeout(() => {
+                if (htmlInput.value.trim()) {
+                    showStatus('HTML content pasted. Click "Parse & Preview" to process.', 'info');
+                }
+            }, 100);
+        });
+    </script>
+</body>
+</html>
