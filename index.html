@@ -141,20 +141,26 @@
         .sheet-row {
             margin-bottom: 20px;
             display: flex;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             gap: 0;
             border: 1px solid #eee;
             page-break-inside: avoid;
+            width: 100%;
+            overflow: hidden;
         }
 
         .sheet-segment {
-            display: inline-block;
+            flex: 1 1 0;
+            min-width: 0;
+            display: flex;
+            align-items: flex-start;
         }
 
         .sheet-segment img {
             display: block;
-            max-width: 100%;
-            height: auto;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
         }
 
         .loading {
@@ -182,11 +188,13 @@
             body {
                 background: white;
                 padding: 0;
+                margin: 0;
             }
 
             .container {
                 box-shadow: none;
                 padding: 0;
+                margin: 0;
                 max-width: 100%;
             }
 
@@ -194,19 +202,37 @@
             .controls,
             .status,
             h1,
+            h2,
             button {
                 display: none !important;
+            }
+
+            .preview-section {
+                margin: 0 !important;
             }
 
             .sheet-container {
                 border: none;
                 padding: 0;
+                margin: 0;
             }
 
             .sheet-row {
                 page-break-inside: avoid;
                 margin-bottom: 0;
                 border: none;
+                width: 100%;
+            }
+
+            .sheet-segment {
+                flex: 1 1 0;
+                min-width: 0;
+            }
+
+            .sheet-segment img {
+                width: 100%;
+                height: 100%;
+                display: block;
             }
         }
     </style>
@@ -323,10 +349,14 @@
 
             const canvas = document.createElement('canvas');
             const totalWidth = images.reduce((sum, img) => sum + img.width, 0);
-            const maxHeight = Math.max(...images.map(img => img.height));
+
+            // Calculate the proper height considering top offsets
+            const minTop = Math.min(...images.map(img => img.top));
+            const maxBottom = Math.max(...images.map(img => img.top + img.height));
+            const totalHeight = maxBottom - minTop;
 
             canvas.width = totalWidth;
-            canvas.height = maxHeight;
+            canvas.height = totalHeight;
 
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = 'white';
@@ -334,7 +364,8 @@
 
             let currentX = 0;
             images.forEach(img => {
-                const yOffset = Math.abs(img.top);
+                // Adjust Y offset relative to the minimum top
+                const yOffset = img.top - minTop;
                 ctx.drawImage(img.element, currentX, yOffset);
                 currentX += img.width;
             });
@@ -356,9 +387,9 @@
                 let totalSamples = 0;
 
                 // Sample points along the height, focusing on staff area
-                const startY = Math.floor(height * 0.2);
-                const endY = Math.floor(height * 0.8);
-                const step = 2;
+                const startY = Math.floor(height * 0.15);
+                const endY = Math.floor(height * 0.85);
+                const step = 1; // More precise sampling
 
                 for (let y = startY; y < endY; y += step) {
                     const idx = (y * width + x) * 4;
@@ -379,9 +410,10 @@
 
             // Find bar lines (vertical lines with high dark pixel density)
             const barLines = [];
-            const threshold = 0.3;
-            const minBarWidth = 2;
-            const minBarDistance = 30; // Minimum distance between bars
+            const threshold = 0.25; // More sensitive threshold
+            const minBarWidth = 1;
+            const maxBarWidth = 8; // Maximum width for a bar line
+            const minBarDistance = 40; // Minimum distance between bars
 
             let inBar = false;
             let barStart = 0;
@@ -392,7 +424,7 @@
                     inBar = true;
                 } else if (verticalScores[x] <= threshold && inBar) {
                     const barWidth = x - barStart;
-                    if (barWidth >= minBarWidth) {
+                    if (barWidth >= minBarWidth && barWidth <= maxBarWidth) {
                         const barCenter = Math.floor((barStart + x) / 2);
 
                         // Check if this bar is far enough from the last one
@@ -400,6 +432,9 @@
                             barLines.push(barCenter);
                         }
                     }
+                    inBar = false;
+                } else if (inBar && x - barStart > maxBarWidth) {
+                    // Bar is too wide, probably not a bar line
                     inBar = false;
                 }
             }
@@ -444,8 +479,37 @@
             const rows = [];
 
             for (let i = 0; i < blocks.length; i += blocksPerRow) {
-                const row = blocks.slice(i, i + blocksPerRow);
-                rows.push(row);
+                const rowBlocks = blocks.slice(i, i + blocksPerRow);
+
+                // Normalize height for all blocks in this row to match the tallest
+                const maxHeight = Math.max(...rowBlocks.map(b => b.height));
+
+                const normalizedBlocks = rowBlocks.map(block => {
+                    if (block.height === maxHeight) {
+                        return block;
+                    }
+
+                    // Create a new canvas with normalized height
+                    const newCanvas = document.createElement('canvas');
+                    newCanvas.width = block.width;
+                    newCanvas.height = maxHeight;
+
+                    const newCtx = newCanvas.getContext('2d');
+                    newCtx.fillStyle = 'white';
+                    newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height);
+
+                    // Center the block vertically
+                    const yOffset = Math.floor((maxHeight - block.height) / 2);
+                    newCtx.drawImage(block.canvas, 0, yOffset);
+
+                    return {
+                        canvas: newCanvas,
+                        width: block.width,
+                        height: maxHeight
+                    };
+                });
+
+                rows.push(normalizedBlocks);
             }
 
             return rows;
@@ -457,6 +521,12 @@
             rows.forEach((row, rowIdx) => {
                 const rowDiv = document.createElement('div');
                 rowDiv.className = 'sheet-row';
+
+                // Calculate the total width and max height for this row
+                const maxHeight = Math.max(...row.map(b => b.height));
+
+                // Set a consistent height for the row
+                rowDiv.style.height = `${maxHeight}px`;
 
                 row.forEach((block, blockIdx) => {
                     const segmentDiv = document.createElement('div');
