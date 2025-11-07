@@ -142,7 +142,7 @@
             margin-bottom: 20px;
             display: flex;
             flex-wrap: nowrap;
-            gap: 0;
+            gap: 2px;
             border: 1px solid #eee;
             page-break-inside: avoid;
             width: 100%;
@@ -154,6 +154,17 @@
             min-width: 0;
             display: flex;
             align-items: flex-start;
+            position: relative;
+        }
+
+        .sheet-segment:not(:last-child)::after {
+            content: '';
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: #ddd;
         }
 
         .sheet-segment img {
@@ -161,6 +172,7 @@
             width: 100%;
             height: 100%;
             object-fit: contain;
+            object-position: left center;
         }
 
         .loading {
@@ -222,6 +234,7 @@
                 margin-bottom: 0;
                 border: none;
                 width: 100%;
+                gap: 2px;
             }
 
             .sheet-segment {
@@ -229,10 +242,22 @@
                 min-width: 0;
             }
 
+            .sheet-segment:not(:last-child)::after {
+                content: '';
+                position: absolute;
+                right: 0;
+                top: 0;
+                bottom: 0;
+                width: 1px;
+                background: #ddd;
+            }
+
             .sheet-segment img {
                 width: 100%;
                 height: 100%;
                 display: block;
+                object-fit: contain;
+                object-position: left center;
             }
         }
     </style>
@@ -379,19 +404,21 @@
             const imageData = ctx.getImageData(0, 0, width, height);
             const data = imageData.data;
 
-            // Sample vertical lines to find bar lines
+            // Check for continuous vertical lines (bar lines must be tall)
             const verticalScores = [];
 
             for (let x = 0; x < width; x++) {
-                let darkPixelCount = 0;
+                let longestDarkStreak = 0;
+                let currentStreak = 0;
+                let totalDarkPixels = 0;
                 let totalSamples = 0;
 
                 // Sample points along the height, focusing on staff area
-                const startY = Math.floor(height * 0.15);
-                const endY = Math.floor(height * 0.85);
-                const step = 1; // More precise sampling
+                const startY = Math.floor(height * 0.2);
+                const endY = Math.floor(height * 0.8);
+                const sampledHeight = endY - startY;
 
-                for (let y = startY; y < endY; y += step) {
+                for (let y = startY; y < endY; y++) {
                     const idx = (y * width + x) * 4;
                     const r = data[idx];
                     const g = data[idx + 1];
@@ -399,30 +426,45 @@
                     const brightness = (r + g + b) / 3;
 
                     if (brightness < 128) {
-                        darkPixelCount++;
+                        currentStreak++;
+                        totalDarkPixels++;
+                        longestDarkStreak = Math.max(longestDarkStreak, currentStreak);
+                    } else {
+                        currentStreak = 0;
                     }
                     totalSamples++;
                 }
 
-                const score = darkPixelCount / totalSamples;
-                verticalScores.push(score);
+                // Score based on both continuity (longest streak) and density
+                const continuityScore = longestDarkStreak / sampledHeight; // How tall is the continuous line
+                const densityScore = totalDarkPixels / totalSamples; // Overall darkness
+
+                // A bar line should have both high continuity and density
+                const score = continuityScore * 0.7 + densityScore * 0.3;
+                verticalScores.push({ score, continuity: continuityScore, density: densityScore });
             }
 
-            // Find bar lines (vertical lines with high dark pixel density)
+            // Find bar lines (tall continuous vertical lines)
             const barLines = [];
-            const threshold = 0.25; // More sensitive threshold
+            const scoreThreshold = 0.4; // Combined score threshold
+            const continuityThreshold = 0.5; // Must span at least 50% of height continuously
             const minBarWidth = 1;
-            const maxBarWidth = 8; // Maximum width for a bar line
-            const minBarDistance = 40; // Minimum distance between bars
+            const maxBarWidth = 6; // Maximum width for a bar line
+            const minBarDistance = 100; // Minimum distance between bars (increased)
 
             let inBar = false;
             let barStart = 0;
 
             for (let x = 0; x < width; x++) {
-                if (verticalScores[x] > threshold && !inBar) {
+                const { score, continuity } = verticalScores[x];
+
+                // Check if this is a potential bar line (must meet both thresholds)
+                const isBarLine = score > scoreThreshold && continuity > continuityThreshold;
+
+                if (isBarLine && !inBar) {
                     barStart = x;
                     inBar = true;
-                } else if (verticalScores[x] <= threshold && inBar) {
+                } else if (!isBarLine && inBar) {
                     const barWidth = x - barStart;
                     if (barWidth >= minBarWidth && barWidth <= maxBarWidth) {
                         const barCenter = Math.floor((barStart + x) / 2);
