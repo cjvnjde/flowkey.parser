@@ -497,17 +497,9 @@
                 const width = endX - startX;
 
                 if (width > 10) { // Minimum block width
-                    const blockCanvas = document.createElement('canvas');
-                    blockCanvas.width = width;
-                    blockCanvas.height = height;
-
-                    const blockCtx = blockCanvas.getContext('2d');
-                    blockCtx.fillStyle = 'white';
-                    blockCtx.fillRect(0, 0, width, height);
-                    blockCtx.drawImage(canvas, startX, 0, width, height, 0, 0, width, height);
-
                     blocks.push({
-                        canvas: blockCanvas,
+                        startX: startX,
+                        endX: endX,
                         width: width,
                         height: height
                     });
@@ -515,6 +507,87 @@
             }
 
             return blocks;
+        }
+
+        function validateAndMergeBlocks(canvas, blocks) {
+            if (blocks.length === 0) return [];
+
+            // Calculate average and median width to determine if blocks are similar
+            const widths = blocks.map(b => b.width);
+            const avgWidth = widths.reduce((sum, w) => sum + w, 0) / widths.length;
+            const sortedWidths = [...widths].sort((a, b) => a - b);
+            const medianWidth = sortedWidths[Math.floor(sortedWidths.length / 2)];
+
+            // Use median as reference (more robust to outliers)
+            const referenceWidth = medianWidth;
+
+            // Blocks should be within 40% of the reference width
+            const minAcceptableWidth = referenceWidth * 0.6;
+            const maxAcceptableWidth = referenceWidth * 1.4;
+
+            const validatedBlocks = [];
+            let i = 0;
+
+            while (i < blocks.length) {
+                let currentBlock = blocks[i];
+
+                // If block is too narrow, try to merge with next blocks
+                while (currentBlock.width < minAcceptableWidth && i < blocks.length - 1) {
+                    i++;
+                    const nextBlock = blocks[i];
+                    currentBlock = {
+                        startX: currentBlock.startX,
+                        endX: nextBlock.endX,
+                        width: nextBlock.endX - currentBlock.startX,
+                        height: currentBlock.height
+                    };
+                }
+
+                // If block is too wide, it might be a wrong detection - keep it but flag it
+                if (currentBlock.width > maxAcceptableWidth * 2) {
+                    // This is likely multiple measures merged - split it in half
+                    const midPoint = Math.floor((currentBlock.startX + currentBlock.endX) / 2);
+                    validatedBlocks.push({
+                        startX: currentBlock.startX,
+                        endX: midPoint,
+                        width: midPoint - currentBlock.startX,
+                        height: currentBlock.height
+                    });
+                    validatedBlocks.push({
+                        startX: midPoint,
+                        endX: currentBlock.endX,
+                        width: currentBlock.endX - midPoint,
+                        height: currentBlock.height
+                    });
+                } else {
+                    validatedBlocks.push(currentBlock);
+                }
+
+                i++;
+            }
+
+            // Now create actual canvas blocks from the validated ranges
+            const finalBlocks = [];
+            const height = canvas.height;
+
+            for (const block of validatedBlocks) {
+                const blockCanvas = document.createElement('canvas');
+                blockCanvas.width = block.width;
+                blockCanvas.height = height;
+
+                const blockCtx = blockCanvas.getContext('2d');
+                blockCtx.fillStyle = 'white';
+                blockCtx.fillRect(0, 0, block.width, height);
+                blockCtx.drawImage(canvas, block.startX, 0, block.width, height, 0, 0, block.width, height);
+
+                finalBlocks.push({
+                    canvas: blockCanvas,
+                    width: block.width,
+                    height: height
+                });
+            }
+
+            return finalBlocks;
         }
 
         function arrangeInRows(blocks, blocksPerRow) {
@@ -629,8 +702,12 @@
                 showStatus(`Detected ${barLines.length} bar lines`, 'info');
 
                 showStatus('Splitting by bar lines...', 'info');
-                const blocks = splitByBarLines(canvas, ctx, barLines);
-                showStatus(`Created ${blocks.length} blocks`, 'info');
+                const rawBlocks = splitByBarLines(canvas, ctx, barLines);
+                showStatus(`Created ${rawBlocks.length} initial blocks`, 'info');
+
+                showStatus('Validating and merging blocks with similar widths...', 'info');
+                const blocks = validateAndMergeBlocks(canvas, rawBlocks);
+                showStatus(`Validated into ${blocks.length} blocks`, 'info');
 
                 const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
                 const rows = arrangeInRows(blocks, blocksPerRow);
