@@ -58,12 +58,13 @@ The application follows a sequential processing pipeline:
 7. **Row Arrangement** (`arrangeInRows()`) - Creates ONE canvas per row with built-in margins:
    - Determines margins: First row leftMargin=0, last row rightMargin=0
    - Creates single canvas with width = sum(block widths) + margins
-   - Draws left margin as white space
+   - **Draws clef/key signature on left (rows 2+)** - extracted from first block for readability
    - Draws all blocks horizontally on the canvas
-   - Draws right margin as white space
+   - Draws right margin as white space (rows except last)
    - Returns array of row canvases (one image per row)
 8. **Rendering** (`renderSheet()`) - Renders each row as a single image:
    - Each row is one `<img>` element displaying the merged canvas
+   - Every row shows the clef/key signature (except first which already has it in the music)
    - No overflow issues - each row fits page width perfectly
    - Staff lines align because margins are built into the image
    - Simple, clean DOM structure
@@ -88,19 +89,20 @@ The application follows a sequential processing pipeline:
   - Last block: ALWAYS keeps original width (endings visible)
   - leftMargin = max(0, firstWidth - avgWidth) - extra width for clef/key signature
   - rightMargin = max(0, lastWidth - avgWidth) - extra width for endings
+  - **Clef extraction**: If leftMargin > 0, extracts the leftMargin-width portion from first block as clefCanvas
 - Width normalization: Only middle blocks scaled to targetWidth
-- Returns `{blocks, leftMargin, rightMargin}` for row composition
+- Returns `{blocks, leftMargin, rightMargin, clefCanvas}` for row composition
 
-**Row Composition** (index.js:377-422):
+**Row Composition** (index.js:402-459):
 - Each row becomes a single merged canvas image
 - Row width = sum(all block widths) + leftMargin + rightMargin
 - Process per row:
   1. Create canvas with calculated width and max block height
   2. Fill with white background
-  3. Draw leftMargin as white space (for rows 2+)
+  3. **Draw clef image on left (for rows 2+)** - NOT white space, actual clef/key signature
   4. Draw all blocks sequentially
   5. Draw rightMargin as white space (for rows except last)
-- Result: One image per row with perfect alignment built-in
+- Result: One image per row with perfect alignment AND clef on every row for easy reading
 
 ## Image Processing Details
 

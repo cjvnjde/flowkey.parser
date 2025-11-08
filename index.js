@@ -325,9 +325,37 @@ function validateAndMergeBlocks(canvas, blocks) {
     targetWidth = sortedMergedWidths[Math.floor(sortedMergedWidths.length / 2)];
   }
 
+  // Get canvas height for block creation
+  const height = canvas.height;
+
+  // Extract clef image if first block has extra width
+  let clefCanvas = null;
+  if (leftMargin > 0 && mergedBlocks.length > 0) {
+    const firstBlock = mergedBlocks[0];
+    clefCanvas = document.createElement("canvas");
+    clefCanvas.width = leftMargin;
+    clefCanvas.height = height;
+
+    const clefCtx = clefCanvas.getContext("2d");
+    clefCtx.fillStyle = "white";
+    clefCtx.fillRect(0, 0, leftMargin, height);
+
+    // Extract the left portion (clef/key signature) from the first block
+    clefCtx.drawImage(
+      canvas,
+      firstBlock.startX,
+      0,
+      leftMargin,
+      height,
+      0,
+      0,
+      leftMargin,
+      height,
+    );
+  }
+
   // Create blocks: first and last ALWAYS keep original width, middle blocks normalized
   const finalBlocks = [];
-  const height = canvas.height;
 
   for (let i = 0; i < mergedBlocks.length; i++) {
     const block = mergedBlocks[i];
@@ -371,10 +399,16 @@ function validateAndMergeBlocks(canvas, blocks) {
     });
   }
 
-  return { blocks: finalBlocks, leftMargin, rightMargin };
+  return { blocks: finalBlocks, leftMargin, rightMargin, clefCanvas };
 }
 
-function arrangeInRows(blocks, blocksPerRow, leftMargin, rightMargin) {
+function arrangeInRows(
+  blocks,
+  blocksPerRow,
+  leftMargin,
+  rightMargin,
+  clefCanvas,
+) {
   const rows = [];
 
   for (let i = 0; i < blocks.length; i += blocksPerRow) {
@@ -401,6 +435,12 @@ function arrangeInRows(blocks, blocksPerRow, leftMargin, rightMargin) {
     const rowCtx = rowCanvas.getContext("2d");
     rowCtx.fillStyle = "white";
     rowCtx.fillRect(0, 0, rowWidth, maxHeight);
+
+    // Draw clef on the left for rows 2+ (instead of white space)
+    if (!isFirstRow && clefCanvas && rowLeftMargin > 0) {
+      const clefYOffset = Math.floor((maxHeight - clefCanvas.height) / 2);
+      rowCtx.drawImage(clefCanvas, 0, clefYOffset);
+    }
 
     // Draw all blocks on the row canvas
     let currentX = rowLeftMargin;
@@ -485,14 +525,18 @@ parseBtn.addEventListener("click", async () => {
     showStatus(`Created ${rawBlocks.length} initial blocks`, "info");
 
     showStatus("Validating and merging blocks with similar widths...", "info");
-    const { blocks, leftMargin, rightMargin } = validateAndMergeBlocks(
-      canvas,
-      rawBlocks,
-    );
+    const { blocks, leftMargin, rightMargin, clefCanvas } =
+      validateAndMergeBlocks(canvas, rawBlocks);
     showStatus(`Validated into ${blocks.length} blocks`, "info");
 
     const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
-    const rows = arrangeInRows(blocks, blocksPerRow, leftMargin, rightMargin);
+    const rows = arrangeInRows(
+      blocks,
+      blocksPerRow,
+      leftMargin,
+      rightMargin,
+      clefCanvas,
+    );
 
     showStatus(
       `Arranged into ${rows.length} rows with ${blocksPerRow} blocks per row`,
