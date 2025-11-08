@@ -49,9 +49,24 @@ The application follows a sequential processing pipeline:
    - First pass: Merges blocks that are too narrow (< 60% of median) forward
    - Second pass: Merges very narrow blocks (< 30% of median, like double bar lines) backward with previous block
    - Splits blocks that are too wide (> 280% of median)
-   - Width normalization: Scales all blocks to median width so they align perfectly in rows
-7. **Row Arrangement** (`arrangeInRows()`) - Groups blocks into rows, normalizes heights within each row
-8. **Rendering** (`renderSheet()`) - Creates DOM structure for preview and print with dynamic heights based on image aspect ratios
+   - **First/Last block handling**:
+     - First block: ALWAYS keeps original width (may contain clef/key signature)
+     - Last block: ALWAYS keeps original width (may contain ending bars)
+     - leftMargin = max(0, firstWidth - avgMiddleWidth)
+     - rightMargin = max(0, lastWidth - avgMiddleWidth)
+   - Width normalization: Middle blocks scaled to average width; first/last keep original size
+7. **Row Arrangement** (`arrangeInRows()`) - Creates ONE canvas per row with built-in margins:
+   - Determines margins: First row leftMargin=0, last row rightMargin=0
+   - Creates single canvas with width = sum(block widths) + margins
+   - Draws left margin as white space
+   - Draws all blocks horizontally on the canvas
+   - Draws right margin as white space
+   - Returns array of row canvases (one image per row)
+8. **Rendering** (`renderSheet()`) - Renders each row as a single image:
+   - Each row is one `<img>` element displaying the merged canvas
+   - No overflow issues - each row fits page width perfectly
+   - Staff lines align because margins are built into the image
+   - Simple, clean DOM structure
 
 ### Key Algorithms
 
@@ -61,14 +76,31 @@ The application follows a sequential processing pipeline:
 - Combines metrics to identify genuine bar lines vs. noteheads or other elements
 - Enforces minimum spacing to avoid duplicate detections
 
-**Block Validation & Merging** (index.js:225-344):
+**Block Validation & Merging** (index.js:302-375):
 - Uses median width (more robust than average) as reference
 - Tolerance: 60%-140% of reference width is acceptable
 - First pass: Too narrow → merge forward with next blocks
 - Second pass: Very narrow (<30% median) → merge backward with previous block (handles double bar lines at end)
 - Too wide (>280%) → split in half (likely missed bar line)
-- Width normalization: All blocks are scaled to median width for perfect alignment in rows
-- Prevents misaligned measures and handles end-of-sheet narrow segments
+- **First/Last block special handling** (when >2 blocks total):
+  - Calculates average width from middle blocks only (pure music width)
+  - First block: ALWAYS keeps original width (clef visible)
+  - Last block: ALWAYS keeps original width (endings visible)
+  - leftMargin = max(0, firstWidth - avgWidth) - extra width for clef/key signature
+  - rightMargin = max(0, lastWidth - avgWidth) - extra width for endings
+- Width normalization: Only middle blocks scaled to targetWidth
+- Returns `{blocks, leftMargin, rightMargin}` for row composition
+
+**Row Composition** (index.js:377-422):
+- Each row becomes a single merged canvas image
+- Row width = sum(all block widths) + leftMargin + rightMargin
+- Process per row:
+  1. Create canvas with calculated width and max block height
+  2. Fill with white background
+  3. Draw leftMargin as white space (for rows 2+)
+  4. Draw all blocks sequentially
+  5. Draw rightMargin as white space (for rows except last)
+- Result: One image per row with perfect alignment built-in
 
 ## Image Processing Details
 
@@ -86,18 +118,14 @@ The application follows a sequential processing pipeline:
 
 ## Print Layout
 
-The print CSS (styles.css:186-252) ensures clean, compact output:
+The print CSS (styles.css:186-220) ensures clean, compact output:
 - Hides all UI controls and headers
-- Removes all padding/margins from sheet container and rows
-- Each row has `page-break-inside: avoid` to prevent splitting across pages
-- `gap: 0` removes horizontal spacing between blocks in a row
-- `margin: 0; padding: 0` on all elements removes all spacing
-- `line-height: 0; font-size: 0` eliminates inline spacing issues
-- Row height is dynamic based on image content (no fixed height)
-- Segments use `flex: 1 1 0` for equal width distribution
-- Images use `height: auto` to maintain aspect ratio naturally
-- `vertical-align: top` prevents baseline alignment spacing
-- Separator lines between segments are hidden in print
+- Each row is a single `<img>` element with `width: 100%; height: auto`
+- `page-break-inside: avoid` prevents rows from splitting across pages
+- `margin: 0; padding: 0` removes all spacing
+- Each row image has margins built-in, so no CSS padding needed
+- No overflow issues - images scale to fit page width
+- Staff lines align perfectly because alignment is rendered into the images
 
 ## Deployment
 
@@ -113,9 +141,9 @@ The print CSS (styles.css:186-252) ensures clean, compact output:
 - Modify `minBarDistance` (line 161) - controls duplicate detection
 
 **Changing Block Width Tolerance:**
-- Modify multipliers in `validateAndMergeBlocks()` (lines 238-239)
+- Modify multipliers in `validateAndMergeBlocks()` (lines 237-238)
 - Currently: 0.6x to 1.4x median width is acceptable
-- Modify `veryNarrowThreshold` (line 242) to change threshold for backward merging
+- Modify `veryNarrowThreshold` (line 241) to change threshold for backward merging
 - Currently: blocks < 0.3x median width are merged backward
 
 **Default Blocks Per Row:**

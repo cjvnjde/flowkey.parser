@@ -299,27 +299,59 @@ function validateAndMergeBlocks(canvas, blocks) {
     }
   }
 
-  // Calculate target width for normalization (use median of merged blocks)
-  const mergedWidths = mergedBlocks.map((b) => b.width);
-  const sortedMergedWidths = [...mergedWidths].sort((a, b) => a - b);
-  const targetWidth = sortedMergedWidths[Math.floor(sortedMergedWidths.length / 2)];
+  // Calculate average width of middle blocks (excluding first and last)
+  let targetWidth;
+  let leftMargin = 0;
+  let rightMargin = 0;
 
-  // Now create actual canvas blocks from the validated ranges with normalized width
+  if (mergedBlocks.length > 2) {
+    // Calculate average of middle blocks only (pure music measures)
+    const middleBlocks = mergedBlocks.slice(1, -1);
+    const middleWidths = middleBlocks.map((b) => b.width);
+    const avgMiddleWidth =
+      middleWidths.reduce((sum, w) => sum + w, 0) / middleWidths.length;
+    targetWidth = avgMiddleWidth;
+
+    // Calculate margins (difference between first/last and average)
+    const firstBlock = mergedBlocks[0];
+    leftMargin = Math.max(0, firstBlock.width - targetWidth);
+
+    const lastBlock = mergedBlocks[mergedBlocks.length - 1];
+    rightMargin = Math.max(0, lastBlock.width - targetWidth);
+  } else {
+    // Not enough blocks, use median
+    const mergedWidths = mergedBlocks.map((b) => b.width);
+    const sortedMergedWidths = [...mergedWidths].sort((a, b) => a - b);
+    targetWidth = sortedMergedWidths[Math.floor(sortedMergedWidths.length / 2)];
+  }
+
+  // Create blocks: first and last ALWAYS keep original width, middle blocks normalized
   const finalBlocks = [];
   const height = canvas.height;
 
-  for (const block of mergedBlocks) {
+  for (let i = 0; i < mergedBlocks.length; i++) {
+    const block = mergedBlocks[i];
     const blockCanvas = document.createElement("canvas");
-    // Normalize width to target width for consistent alignment
-    const normalizedWidth = targetWidth;
-    blockCanvas.width = normalizedWidth;
+
+    // First and last blocks keep original size, middle blocks normalized
+    const isFirst = i === 0;
+    const isLast = i === mergedBlocks.length - 1;
+
+    let blockWidth;
+    if (mergedBlocks.length > 2 && (isFirst || isLast)) {
+      blockWidth = block.width; // Keep original width
+    } else {
+      blockWidth = targetWidth; // Normalize
+    }
+
+    blockCanvas.width = blockWidth;
     blockCanvas.height = height;
 
     const blockCtx = blockCanvas.getContext("2d");
     blockCtx.fillStyle = "white";
-    blockCtx.fillRect(0, 0, normalizedWidth, height);
+    blockCtx.fillRect(0, 0, blockWidth, height);
 
-    // Draw the original block content, scaling it to fit the normalized width
+    // Draw WITHOUT scaling - keep at original size
     blockCtx.drawImage(
       canvas,
       block.startX,
@@ -328,55 +360,62 @@ function validateAndMergeBlocks(canvas, blocks) {
       height,
       0,
       0,
-      normalizedWidth,
+      blockWidth,
       height,
     );
 
     finalBlocks.push({
       canvas: blockCanvas,
-      width: normalizedWidth,
+      width: blockWidth,
       height: height,
     });
   }
 
-  return finalBlocks;
+  return { blocks: finalBlocks, leftMargin, rightMargin };
 }
 
-function arrangeInRows(blocks, blocksPerRow) {
+function arrangeInRows(blocks, blocksPerRow, leftMargin, rightMargin) {
   const rows = [];
 
   for (let i = 0; i < blocks.length; i += blocksPerRow) {
     const rowBlocks = blocks.slice(i, i + blocksPerRow);
+    const rowIndex = Math.floor(i / blocksPerRow);
+    const totalRows = Math.ceil(blocks.length / blocksPerRow);
 
-    // Normalize height for all blocks in this row to match the tallest
+    // Determine margins for this row
+    const isFirstRow = rowIndex === 0;
+    const isLastRow = rowIndex === totalRows - 1;
+    const rowLeftMargin = isFirstRow ? 0 : leftMargin;
+    const rowRightMargin = isLastRow ? 0 : rightMargin;
+
+    // Calculate total width and max height for the row
+    const totalBlockWidth = rowBlocks.reduce((sum, b) => sum + b.width, 0);
     const maxHeight = Math.max(...rowBlocks.map((b) => b.height));
+    const rowWidth = totalBlockWidth + rowLeftMargin + rowRightMargin;
 
-    const normalizedBlocks = rowBlocks.map((block) => {
-      if (block.height === maxHeight) {
-        return block;
-      }
+    // Create a single canvas for the entire row
+    const rowCanvas = document.createElement("canvas");
+    rowCanvas.width = rowWidth;
+    rowCanvas.height = maxHeight;
 
-      // Create a new canvas with normalized height
-      const newCanvas = document.createElement("canvas");
-      newCanvas.width = block.width;
-      newCanvas.height = maxHeight;
+    const rowCtx = rowCanvas.getContext("2d");
+    rowCtx.fillStyle = "white";
+    rowCtx.fillRect(0, 0, rowWidth, maxHeight);
 
-      const newCtx = newCanvas.getContext("2d");
-      newCtx.fillStyle = "white";
-      newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height);
-
-      // Center the block vertically
+    // Draw all blocks on the row canvas
+    let currentX = rowLeftMargin;
+    rowBlocks.forEach((block) => {
+      // Center block vertically if needed
       const yOffset = Math.floor((maxHeight - block.height) / 2);
-      newCtx.drawImage(block.canvas, 0, yOffset);
-
-      return {
-        canvas: newCanvas,
-        width: block.width,
-        height: maxHeight,
-      };
+      rowCtx.drawImage(block.canvas, currentX, yOffset);
+      currentX += block.width;
     });
 
-    rows.push(normalizedBlocks);
+    rows.push({
+      canvas: rowCanvas,
+      width: rowWidth,
+      height: maxHeight,
+    });
   }
 
   return rows;
@@ -389,18 +428,12 @@ function renderSheet(rows) {
     const rowDiv = document.createElement("div");
     rowDiv.className = "sheet-row";
 
-    row.forEach((block, blockIdx) => {
-      const segmentDiv = document.createElement("div");
-      segmentDiv.className = "sheet-segment";
+    const img = document.createElement("img");
+    img.src = row.canvas.toDataURL();
+    img.alt = `Row ${rowIdx}`;
+    img.className = "sheet-row-image";
 
-      const img = document.createElement("img");
-      img.src = block.canvas.toDataURL();
-      img.alt = `Block ${rowIdx}-${blockIdx}`;
-
-      segmentDiv.appendChild(img);
-      rowDiv.appendChild(segmentDiv);
-    });
-
+    rowDiv.appendChild(img);
     sheetContainer.appendChild(rowDiv);
   });
 
@@ -452,11 +485,14 @@ parseBtn.addEventListener("click", async () => {
     showStatus(`Created ${rawBlocks.length} initial blocks`, "info");
 
     showStatus("Validating and merging blocks with similar widths...", "info");
-    const blocks = validateAndMergeBlocks(canvas, rawBlocks);
+    const { blocks, leftMargin, rightMargin } = validateAndMergeBlocks(
+      canvas,
+      rawBlocks,
+    );
     showStatus(`Validated into ${blocks.length} blocks`, "info");
 
     const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
-    const rows = arrangeInRows(blocks, blocksPerRow);
+    const rows = arrangeInRows(blocks, blocksPerRow, leftMargin, rightMargin);
 
     showStatus(
       `Arranged into ${rows.length} rows with ${blocksPerRow} blocks per row`,
