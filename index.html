@@ -84,6 +84,19 @@
         border-color: #4caf50;
       }
 
+      input[type="checkbox"] {
+        width: auto;
+        margin-right: 8px;
+        cursor: pointer;
+      }
+
+      label:has(input[type="checkbox"]) {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        user-select: none;
+      }
+
       button {
         padding: 12px 24px;
         background: #4caf50;
@@ -150,6 +163,13 @@
         display: block;
         width: 100%;
         height: auto;
+      }
+
+      /* Uniform height mode styles */
+      .uniform-height-mode .sheet-row-image {
+        width: auto !important;
+        height: auto !important;
+        max-width: 100%;
       }
 
       .loading {
@@ -225,6 +245,13 @@
           margin: 0;
           padding: 0;
         }
+
+        /* Uniform height mode in print */
+        .uniform-height-mode .sheet-row-image {
+          width: auto !important;
+          height: auto !important;
+          max-width: 100%;
+        }
       }
     </style>
   </head>
@@ -245,6 +272,12 @@
           <label for="blocksPerRow">Blocks per Row:</label>
           <input type="number" id="blocksPerRow" value="4" min="1" max="16" />
         </div>
+        <div class="input-group">
+          <label>
+            <input type="checkbox" id="uniformHeightMode" />
+            Uniform height mode (left-aligned, natural widths)
+          </label>
+        </div>
         <button id="parseBtn">Parse & Preview</button>
         <button id="printBtn" disabled>Print</button>
       </div>
@@ -260,6 +293,7 @@
     <script>
       const htmlInput = document.getElementById("htmlInput");
       const blocksPerRowInput = document.getElementById("blocksPerRow");
+      const uniformHeightMode = document.getElementById("uniformHeightMode");
       const parseBtn = document.getElementById("parseBtn");
       const printBtn = document.getElementById("printBtn");
       const statusDiv = document.getElementById("status");
@@ -652,8 +686,36 @@
         return { blocks: finalBlocks, clefCanvas, clefWidth };
       }
 
-      function arrangeInRows(blocks, blocksPerRow, clefCanvas, clefWidth) {
+      function arrangeInRows(
+        blocks,
+        blocksPerRow,
+        clefCanvas,
+        clefWidth,
+        useUniformHeight,
+      ) {
         const rows = [];
+
+        // Calculate uniform dimensions if mode is enabled
+        const uniformHeight = useUniformHeight
+          ? Math.max(...blocks.map((b) => b.height))
+          : null;
+
+        // Calculate maximum row width for uniform height mode
+        let maxRowWidth = 0;
+        if (useUniformHeight) {
+          for (let i = 0; i < blocks.length; i += blocksPerRow) {
+            const rowBlocks = blocks.slice(i, i + blocksPerRow);
+            const rowIndex = Math.floor(i / blocksPerRow);
+            const isFirstRow = rowIndex === 0;
+            const rowClefWidth = !isFirstRow && clefCanvas ? clefWidth : 0;
+            const totalBlockWidth = rowBlocks.reduce(
+              (sum, b) => sum + b.width,
+              0,
+            );
+            const rowWidth = totalBlockWidth + rowClefWidth;
+            maxRowWidth = Math.max(maxRowWidth, rowWidth);
+          }
+        }
 
         for (let i = 0; i < blocks.length; i += blocksPerRow) {
           const rowBlocks = blocks.slice(i, i + blocksPerRow);
@@ -663,26 +725,32 @@
           // Add clef to the left for rows 2+ (not for the first row)
           const rowClefWidth = !isFirstRow && clefCanvas ? clefWidth : 0;
 
-          // Calculate total width and max height for the row
+          // Calculate total width and height for the row
           const totalBlockWidth = rowBlocks.reduce(
             (sum, b) => sum + b.width,
             0,
           );
-          const maxHeight = Math.max(...rowBlocks.map((b) => b.height));
-          const rowWidth = totalBlockWidth + rowClefWidth;
+          const rowHeight = useUniformHeight
+            ? uniformHeight
+            : Math.max(...rowBlocks.map((b) => b.height));
+
+          // In uniform height mode, all rows have the same width (padded if needed)
+          const rowWidth = useUniformHeight
+            ? maxRowWidth
+            : totalBlockWidth + rowClefWidth;
 
           // Create a single canvas for the entire row
           const rowCanvas = document.createElement("canvas");
           rowCanvas.width = rowWidth;
-          rowCanvas.height = maxHeight;
+          rowCanvas.height = rowHeight;
 
           const rowCtx = rowCanvas.getContext("2d");
           rowCtx.fillStyle = "white";
-          rowCtx.fillRect(0, 0, rowWidth, maxHeight);
+          rowCtx.fillRect(0, 0, rowWidth, rowHeight);
 
           // Draw clef on the left for rows 2+
           if (!isFirstRow && clefCanvas) {
-            const clefYOffset = Math.floor((maxHeight - clefCanvas.height) / 2);
+            const clefYOffset = Math.floor((rowHeight - clefCanvas.height) / 2);
             rowCtx.drawImage(clefCanvas, 0, clefYOffset);
           }
 
@@ -690,23 +758,39 @@
           let currentX = rowClefWidth;
           rowBlocks.forEach((block) => {
             // Center block vertically if needed
-            const yOffset = Math.floor((maxHeight - block.height) / 2);
+            const yOffset = Math.floor((rowHeight - block.height) / 2);
             rowCtx.drawImage(block.canvas, currentX, yOffset);
             currentX += block.width;
           });
 
+          // Remaining space is already white from fillRect above
+
           rows.push({
             canvas: rowCanvas,
             width: rowWidth,
-            height: maxHeight,
+            height: rowHeight,
           });
         }
 
         return rows;
       }
 
-      function renderSheet(rows) {
+      function renderSheet(rows, useUniformHeight) {
         sheetContainer.innerHTML = "";
+
+        // Apply mode class to container
+        if (useUniformHeight) {
+          sheetContainer.classList.add("uniform-height-mode");
+        } else {
+          sheetContainer.classList.remove("uniform-height-mode");
+        }
+
+        // In uniform height mode, find the reference height for staff lines
+        let referenceHeight = null;
+        if (useUniformHeight && rows.length > 0) {
+          // Use the maximum height as reference to ensure all staff lines are the same size
+          referenceHeight = Math.max(...rows.map((r) => r.height));
+        }
 
         rows.forEach((row, rowIdx) => {
           const rowDiv = document.createElement("div");
@@ -716,6 +800,11 @@
           img.src = row.canvas.toDataURL();
           img.alt = `Row ${rowIdx}`;
           img.className = "sheet-row-image";
+
+          // In uniform height mode, set explicit height to make staff lines uniform
+          if (useUniformHeight && referenceHeight) {
+            img.style.height = `${referenceHeight}px`;
+          }
 
           rowDiv.appendChild(img);
           sheetContainer.appendChild(rowDiv);
@@ -779,11 +868,13 @@
           showStatus(`Validated into ${blocks.length} blocks`, "info");
 
           const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
+          const useUniformHeight = uniformHeightMode.checked;
           const rows = arrangeInRows(
             blocks,
             blocksPerRow,
             clefCanvas,
             clefWidth,
+            useUniformHeight,
           );
 
           showStatus(
@@ -791,7 +882,7 @@
             "success",
           );
 
-          renderSheet(rows);
+          renderSheet(rows, useUniformHeight);
         } catch (error) {
           console.error("Error:", error);
           showStatus(`Error: ${error.message}`, "error");
