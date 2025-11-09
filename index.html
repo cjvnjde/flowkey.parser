@@ -570,79 +570,57 @@
           }
         }
 
-        // Calculate average width of middle blocks (excluding first and last)
-        let targetWidth;
-        let leftMargin = 0;
-        let rightMargin = 0;
+        // Get canvas height for block creation
+        const height = canvas.height;
+
+        // Calculate average width to determine clef width
+        // (first block is typically wider because it contains clef/key signature)
+        let clefCanvas = null;
+        let clefWidth = 0;
 
         if (mergedBlocks.length > 2) {
-          // Calculate average of middle blocks only (pure music measures)
+          const firstBlock = mergedBlocks[0];
           const middleBlocks = mergedBlocks.slice(1, -1);
           const middleWidths = middleBlocks.map((b) => b.width);
           const avgMiddleWidth =
             middleWidths.reduce((sum, w) => sum + w, 0) / middleWidths.length;
-          targetWidth = avgMiddleWidth;
 
-          // Calculate margins (difference between first/last and average)
-          const firstBlock = mergedBlocks[0];
-          leftMargin = Math.max(0, firstBlock.width - targetWidth);
+          // If first block is wider than average, the extra width is the clef
+          clefWidth = Math.max(0, firstBlock.width - avgMiddleWidth);
 
-          const lastBlock = mergedBlocks[mergedBlocks.length - 1];
-          rightMargin = Math.max(0, lastBlock.width - targetWidth);
-        } else {
-          // Not enough blocks, use median
-          const mergedWidths = mergedBlocks.map((b) => b.width);
-          const sortedMergedWidths = [...mergedWidths].sort((a, b) => a - b);
-          targetWidth =
-            sortedMergedWidths[Math.floor(sortedMergedWidths.length / 2)];
+          if (clefWidth > 0) {
+            clefCanvas = document.createElement("canvas");
+            clefCanvas.width = clefWidth;
+            clefCanvas.height = height;
+
+            const clefCtx = clefCanvas.getContext("2d");
+            clefCtx.fillStyle = "white";
+            clefCtx.fillRect(0, 0, clefWidth, height);
+
+            // Extract the left portion (clef/key signature) from the first block
+            clefCtx.drawImage(
+              canvas,
+              firstBlock.startX,
+              0,
+              clefWidth,
+              height,
+              0,
+              0,
+              clefWidth,
+              height,
+            );
+          }
         }
 
-        // Get canvas height for block creation
-        const height = canvas.height;
-
-        // Extract clef image if first block has extra width
-        let clefCanvas = null;
-        if (leftMargin > 0 && mergedBlocks.length > 0) {
-          const firstBlock = mergedBlocks[0];
-          clefCanvas = document.createElement("canvas");
-          clefCanvas.width = leftMargin;
-          clefCanvas.height = height;
-
-          const clefCtx = clefCanvas.getContext("2d");
-          clefCtx.fillStyle = "white";
-          clefCtx.fillRect(0, 0, leftMargin, height);
-
-          // Extract the left portion (clef/key signature) from the first block
-          clefCtx.drawImage(
-            canvas,
-            firstBlock.startX,
-            0,
-            leftMargin,
-            height,
-            0,
-            0,
-            leftMargin,
-            height,
-          );
-        }
-
-        // Create blocks: first and last ALWAYS keep original width, middle blocks normalized
+        // Create blocks: ALL blocks keep their natural width (no normalization)
         const finalBlocks = [];
 
         for (let i = 0; i < mergedBlocks.length; i++) {
           const block = mergedBlocks[i];
           const blockCanvas = document.createElement("canvas");
 
-          // First and last blocks keep original size, middle blocks normalized
-          const isFirst = i === 0;
-          const isLast = i === mergedBlocks.length - 1;
-
-          let blockWidth;
-          if (mergedBlocks.length > 2 && (isFirst || isLast)) {
-            blockWidth = block.width; // Keep original width
-          } else {
-            blockWidth = targetWidth; // Normalize
-          }
+          // Keep original width for all blocks
+          const blockWidth = block.width;
 
           blockCanvas.width = blockWidth;
           blockCanvas.height = height;
@@ -651,7 +629,7 @@
           blockCtx.fillStyle = "white";
           blockCtx.fillRect(0, 0, blockWidth, height);
 
-          // Draw WITHOUT scaling - keep at original size
+          // Draw at natural size without scaling
           blockCtx.drawImage(
             canvas,
             block.startX,
@@ -671,28 +649,19 @@
           });
         }
 
-        return { blocks: finalBlocks, leftMargin, rightMargin, clefCanvas };
+        return { blocks: finalBlocks, clefCanvas, clefWidth };
       }
 
-      function arrangeInRows(
-        blocks,
-        blocksPerRow,
-        leftMargin,
-        rightMargin,
-        clefCanvas,
-      ) {
+      function arrangeInRows(blocks, blocksPerRow, clefCanvas, clefWidth) {
         const rows = [];
 
         for (let i = 0; i < blocks.length; i += blocksPerRow) {
           const rowBlocks = blocks.slice(i, i + blocksPerRow);
           const rowIndex = Math.floor(i / blocksPerRow);
-          const totalRows = Math.ceil(blocks.length / blocksPerRow);
-
-          // Determine margins for this row
           const isFirstRow = rowIndex === 0;
-          const isLastRow = rowIndex === totalRows - 1;
-          const rowLeftMargin = isFirstRow ? 0 : leftMargin;
-          const rowRightMargin = isLastRow ? 0 : rightMargin;
+
+          // Add clef to the left for rows 2+ (not for the first row)
+          const rowClefWidth = !isFirstRow && clefCanvas ? clefWidth : 0;
 
           // Calculate total width and max height for the row
           const totalBlockWidth = rowBlocks.reduce(
@@ -700,7 +669,7 @@
             0,
           );
           const maxHeight = Math.max(...rowBlocks.map((b) => b.height));
-          const rowWidth = totalBlockWidth + rowLeftMargin + rowRightMargin;
+          const rowWidth = totalBlockWidth + rowClefWidth;
 
           // Create a single canvas for the entire row
           const rowCanvas = document.createElement("canvas");
@@ -711,14 +680,14 @@
           rowCtx.fillStyle = "white";
           rowCtx.fillRect(0, 0, rowWidth, maxHeight);
 
-          // Draw clef on the left for rows 2+ (instead of white space)
-          if (!isFirstRow && clefCanvas && rowLeftMargin > 0) {
+          // Draw clef on the left for rows 2+
+          if (!isFirstRow && clefCanvas) {
             const clefYOffset = Math.floor((maxHeight - clefCanvas.height) / 2);
             rowCtx.drawImage(clefCanvas, 0, clefYOffset);
           }
 
-          // Draw all blocks on the row canvas
-          let currentX = rowLeftMargin;
+          // Draw all blocks on the row canvas at their natural widths
+          let currentX = rowClefWidth;
           rowBlocks.forEach((block) => {
             // Center block vertically if needed
             const yOffset = Math.floor((maxHeight - block.height) / 2);
@@ -803,17 +772,18 @@
             "Validating and merging blocks with similar widths...",
             "info",
           );
-          const { blocks, leftMargin, rightMargin, clefCanvas } =
-            validateAndMergeBlocks(canvas, rawBlocks);
+          const { blocks, clefCanvas, clefWidth } = validateAndMergeBlocks(
+            canvas,
+            rawBlocks,
+          );
           showStatus(`Validated into ${blocks.length} blocks`, "info");
 
           const blocksPerRow = parseInt(blocksPerRowInput.value) || 4;
           const rows = arrangeInRows(
             blocks,
             blocksPerRow,
-            leftMargin,
-            rightMargin,
             clefCanvas,
+            clefWidth,
           );
 
           showStatus(
